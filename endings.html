@@ -1,0 +1,605 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LISTENERS SURVIVAL - ENDINGS</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Noto+Sans+KR:wght@300;400;700&display=swap');
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            background: #000;
+            overflow: hidden;
+            font-family: 'Share Tech Mono', monospace;
+            color: #0f0;
+        }
+
+        .start-screen {
+            position: fixed;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            background: #000;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+        }
+
+        .boot-text {
+            font-family: 'Share Tech Mono', monospace;
+            font-size: 24px;
+            color: #0f0;
+            text-align: center;
+            text-shadow: 0 0 10px #0f0;
+            margin-bottom: 60px;
+        }
+
+        .choice-container {
+            display: flex;
+            gap: 40px;
+            margin-top: 20px;
+        }
+
+        .choice-button {
+            padding: 25px 50px;
+            font-size: 18px;
+            font-family: 'Share Tech Mono', monospace;
+            cursor: pointer;
+            text-transform: uppercase;
+            letter-spacing: 3px;
+            transition: all 0.3s;
+            border: 2px solid;
+        }
+
+        .choice-success {
+            color: #0f0;
+            background: rgba(0, 255, 0, 0.1);
+            border-color: #0f0;
+            box-shadow: 0 0 20px rgba(0, 255, 0, 0.3);
+        }
+
+        .choice-success:hover {
+            background: rgba(0, 255, 0, 0.2);
+            box-shadow: 0 0 30px rgba(0, 255, 0, 0.5);
+            transform: translateY(-3px);
+        }
+
+        .choice-failed {
+            color: #f00;
+            background: rgba(255, 0, 0, 0.1);
+            border-color: #f00;
+            box-shadow: 0 0 20px rgba(255, 0, 0, 0.3);
+        }
+
+        .choice-failed:hover {
+            background: rgba(255, 0, 0, 0.2);
+            box-shadow: 0 0 30px rgba(255, 0, 0, 0.5);
+            transform: translateY(-3px);
+        }
+
+        .hint-text {
+            color: #666;
+            font-size: 14px;
+            margin-top: 40px;
+            letter-spacing: 2px;
+        }
+
+        canvas {
+            display: block;
+            width: 100vw;
+            height: 100vh;
+            background: #000;
+        }
+
+        .scan-overlay {
+            position: fixed;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            background:
+                repeating-linear-gradient(
+                    0deg,
+                    transparent,
+                    transparent 2px,
+                    rgba(0, 255, 0, 0.02) 2px,
+                    rgba(0, 255, 0, 0.02) 4px
+                );
+            pointer-events: none;
+            z-index: 10;
+        }
+
+        .scan-overlay.failed {
+            background:
+                repeating-linear-gradient(
+                    0deg,
+                    transparent,
+                    transparent 2px,
+                    rgba(255, 0, 0, 0.02) 2px,
+                    rgba(255, 0, 0, 0.02) 4px
+                );
+        }
+
+        .vignette {
+            position: fixed;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            background: radial-gradient(circle at center, transparent 0%, rgba(0, 0, 0, 0.5) 100%);
+            pointer-events: none;
+            z-index: 5;
+        }
+    </style>
+</head>
+<body>
+    <div class="start-screen" id="startScreen">
+        <div class="boot-text">
+            > ESCAPE PROTOCOL INITIATED<br>
+            > SELECT OUTCOME
+        </div>
+
+        <div class="choice-container">
+            <div class="choice-button choice-success" id="successButton">
+                [ ESCAPE SUCCESS ]
+            </div>
+            <div class="choice-button choice-failed" id="failedButton">
+                [ ESCAPE FAILED ]
+            </div>
+        </div>
+
+        <div class="hint-text">CHOOSE YOUR FATE</div>
+    </div>
+
+    <div class="scan-overlay" id="scanOverlay"></div>
+    <div class="vignette"></div>
+    <canvas id="canvas"></canvas>
+
+    <script>
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        const startScreen = document.getElementById('startScreen');
+        const successButton = document.getElementById('successButton');
+        const failedButton = document.getElementById('failedButton');
+        const scanOverlay = document.getElementById('scanOverlay');
+
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+
+        window.addEventListener('resize', () => {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+        });
+
+        let audioCtx;
+        let startTime;
+        let currentLine = 0;
+        let selectedEnding = null;
+        let scrollOffset = 0;
+
+        // Background ambient sound
+        let bgOscillator;
+        let bgGain;
+
+        function startAmbientSound(isSuccess) {
+            if (!audioCtx) return;
+            try {
+                bgOscillator = audioCtx.createOscillator();
+                bgGain = audioCtx.createGain();
+
+                bgOscillator.type = 'sine';
+                bgOscillator.frequency.value = isSuccess ? 60 : 30;
+                bgGain.gain.value = 0.05;
+
+                bgOscillator.connect(bgGain);
+                bgGain.connect(audioCtx.destination);
+                bgOscillator.start();
+            } catch(e) {}
+        }
+
+        function playStaticNoise(duration) {
+            if (!audioCtx) return;
+            try {
+                const bufferSize = audioCtx.sampleRate * duration;
+                const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+                const output = buffer.getChannelData(0);
+
+                for (let i = 0; i < bufferSize; i++) {
+                    output[i] = (Math.random() * 2 - 1) * 0.15;
+                }
+
+                const noise = audioCtx.createBufferSource();
+                const filter = audioCtx.createBiquadFilter();
+                const gain = audioCtx.createGain();
+
+                filter.type = 'bandpass';
+                filter.frequency.value = 1500;
+
+                noise.buffer = buffer;
+                gain.gain.setValueAtTime(0.2, audioCtx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + duration);
+
+                noise.connect(filter);
+                filter.connect(gain);
+                gain.connect(audioCtx.destination);
+                noise.start();
+            } catch(e) {}
+        }
+
+        function playBeep(isSuccess) {
+            if (!audioCtx) return;
+            try {
+                const osc = audioCtx.createOscillator();
+                const gain = audioCtx.createGain();
+
+                osc.frequency.value = isSuccess ? 800 : 400;
+                gain.gain.value = 0.1;
+
+                osc.connect(gain);
+                gain.connect(audioCtx.destination);
+
+                osc.start();
+                osc.stop(audioCtx.currentTime + 0.05);
+            } catch(e) {}
+        }
+
+        // Story data - 1분 30초 분량
+        const successStory = {
+            header: "ESCAPE SUCCESS",
+            subheader: "[구조 신호 확인]",
+            color: '#0f0',
+            lines: [
+                "> 어둠 속에서 녹색 신호탄이 하늘을 향해 솟아올랐다.",
+                "",
+                "> 한동안 아무런 응답도 없었다.",
+                "> 주변에서는 여전히 정체불명의 개체들이 움직이고 있었다.",
+                "",
+                "> 그때, 멀리서 희미한 엔진 소리가 들려오기 시작했다.",
+                "",
+                "> 무전기가 작동하기 시작했다.",
+                "",
+                "> [INCOMING TRANSMISSION]",
+                "> '여기는 구조팀. 녹색 신호 확인.'",
+                "> '탈출 지점으로 접근 중이다.'",
+                "",
+                "> 마침내 어둠을 가르며 헬기가 모습을 드러냈다.",
+                "> 탐조등이 지상을 비추었다.",
+                "",
+                "> 개체들이 주변으로 몰려들기 시작했지만,",
+                "> 더 이상 망설일 시간은 없었다.",
+                "",
+                "> 한 명씩 헬기에 탑승했고,",
+                "> 마지막 생존자가 올라탄 순간 헬기는 지면을 떠났다.",
+                "",
+                "> 아래로 멀어지는 도시.",
+                "> 불타는 건물과 무너진 도로.",
+                "",
+                "> 잠시 후 무전에서 새로운 통신이 들려왔다.",
+                "",
+                "> '본부, 여기는 구조팀.'",
+                "> '생존자 확보 완료. 안전 지역으로 이동 중이다.'",
+                "",
+                "> 그러나 본부의 답변은 예상과 달랐다.",
+                "",
+                "> '확인했다. 복귀 경로를 변경하라.'",
+                "> '충돌 지점에서 새로운 움직임이 감지되었다.'",
+                "",
+                "> 인류는 아직 끝나지 않았다.",
+                "> 하지만 이 재앙 역시 끝난 것이 아니었다.",
+                "",
+                "",
+                "> 당신은 탈출에 성공했다.",
+                "",
+                "> STATUS: ESCAPE SUCCESSFUL"
+            ]
+        };
+
+        const failedStory = {
+            header: "ESCAPE FAILED",
+            subheader: "[구조 신호 미확인]",
+            color: '#f00',
+            lines: [
+                "> 탈출 구역에 도착했지만,",
+                "> 주변 상황은 예상보다 훨씬 심각했다.",
+                "",
+                "> 생존자들은 서둘러 신호탄을 발사했다.",
+                "> 녹색 불빛이 하늘을 향해 솟아올랐다.",
+                "",
+                "> 잠시 후 무전기에서 잡음이 들려왔다.",
+                "",
+                "> [INCOMING TRANSMISSION]",
+                "> '여기는 구조팀. 신호를 확인했다.'",
+                "> '현재 해당 지역으로 접근 중이다. 대기하라.'",
+                "",
+                "> 구조가 가능할 것이라는 희망이 생겼다.",
+                "",
+                "> 하지만 그 순간,",
+                "> 주변에서 이상한 소리가 들려오기 시작했다.",
+                "",
+                "> 개체들이 신호를 감지한 것이다.",
+                "",
+                "> WARNING: HOSTILE ENTITIES DETECTED",
+                "",
+                "> 생존자들은 탈출 지점을 벗어나려 했지만 이미 늦었다.",
+                "",
+                "> 무전기에서는 계속해서 구조팀의 목소리가 들려왔다.",
+                "",
+                "> '생존자 응답하라.'",
+                "> '현재 위치를 확인할 수 없다.'",
+                "",
+                "> 하지만 돌아오는 대답은 없었다.",
+                "",
+                "> [SIGNAL LOST]",
+                "",
+                "> 잠시 후 구조팀은 해당 지역의 접근을 중단했다.",
+                "",
+                "> '본부, 여기는 구조팀.'",
+                "> '구조 지점에서 생존자 신호가 끊겼다.'",
+                "> '현재 접근 불가능. 작전을 중단한다.'",
+                "",
+                "> [CONNECTION TERMINATED]",
+                "",
+                "> 하늘에 남아 있던 녹색 연기는 서서히 사라졌고,",
+                "> 탈출 구역에는 다시 침묵이 찾아왔다.",
+                "",
+                "",
+                "> 당신은 탈출하지 못했다.",
+                "",
+                "> STATUS: ESCAPE FAILED"
+            ]
+        };
+
+        function drawScanLine(y, color) {
+            ctx.strokeStyle = color === '#f00' ? 'rgba(255, 0, 0, 0.2)' : 'rgba(0, 255, 0, 0.2)';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(0, y);
+            ctx.lineTo(canvas.width, y);
+            ctx.stroke();
+        }
+
+        function drawNoise(color) {
+            for (let i = 0; i < 30; i++) {
+                const opacity = Math.random() * 0.03;
+                if (color === '#f00') {
+                    ctx.fillStyle = 'rgba(255, 0, 0, ' + opacity + ')';
+                } else {
+                    ctx.fillStyle = 'rgba(0, 255, 0, ' + opacity + ')';
+                }
+                ctx.fillRect(
+                    Math.random() * canvas.width,
+                    Math.random() * canvas.height,
+                    2,
+                    2
+                );
+            }
+        }
+
+        function drawHUD(color) {
+            const time = new Date().toISOString().split('T')[1].split('.')[0];
+            const mainColor = color;
+
+            ctx.font = '13px Share Tech Mono';
+            ctx.fillStyle = mainColor;
+            ctx.textAlign = 'left';
+            ctx.fillText('REC', 20, 30);
+            ctx.fillStyle = 'rgba(255, 0, 0, 0.9)';
+            ctx.fillRect(50, 23, 8, 8);
+
+            ctx.fillStyle = mainColor;
+            ctx.fillText(time, 70, 30);
+
+            ctx.textAlign = 'right';
+            ctx.fillText('SIGNAL: [' + '█'.repeat(Math.floor(Math.random() * 5) + 3) + ' '.repeat(5) + ']', canvas.width - 20, 30);
+
+            ctx.textAlign = 'left';
+            const status = color === '#f00' ? 'CRITICAL' : 'ACTIVE';
+            ctx.fillText('SYSTEM: ' + status, 20, canvas.height - 20);
+
+            ctx.textAlign = 'right';
+            ctx.fillText('ENCRYPTED CHANNEL', canvas.width - 20, canvas.height - 20);
+
+            ctx.strokeStyle = mainColor;
+            ctx.lineWidth = 2;
+            const cornerSize = 20;
+
+            ctx.beginPath();
+            ctx.moveTo(10, 10 + cornerSize);
+            ctx.lineTo(10, 10);
+            ctx.lineTo(10 + cornerSize, 10);
+            ctx.stroke();
+
+            ctx.beginPath();
+            ctx.moveTo(canvas.width - 10 - cornerSize, 10);
+            ctx.lineTo(canvas.width - 10, 10);
+            ctx.lineTo(canvas.width - 10, 10 + cornerSize);
+            ctx.stroke();
+
+            ctx.beginPath();
+            ctx.moveTo(10, canvas.height - 10 - cornerSize);
+            ctx.lineTo(10, canvas.height - 10);
+            ctx.lineTo(10 + cornerSize, canvas.height - 10);
+            ctx.stroke();
+
+            ctx.beginPath();
+            ctx.moveTo(canvas.width - 10 - cornerSize, canvas.height - 10);
+            ctx.lineTo(canvas.width - 10, canvas.height - 10);
+            ctx.lineTo(canvas.width - 10, canvas.height - 10 - cornerSize);
+            ctx.stroke();
+        }
+
+        function drawScene(story, progress) {
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.95)';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            const color = story.color;
+
+            // Header - 더 밝게
+            ctx.font = 'bold 22px Share Tech Mono';
+            ctx.fillStyle = color;
+            ctx.textAlign = 'left';
+            ctx.shadowColor = color;
+            ctx.shadowBlur = 15;
+            ctx.fillText('> ' + story.header, 40, 80);
+
+            if (story.subheader) {
+                ctx.font = '17px Share Tech Mono';
+                ctx.fillStyle = color === '#f00' ? 'rgba(255, 50, 50, 0.9)' : 'rgba(50, 255, 50, 0.9)';
+                ctx.shadowBlur = 10;
+                ctx.fillText(story.subheader, 40, 110);
+            }
+
+            ctx.strokeStyle = color === '#f00' ? 'rgba(255, 0, 0, 0.6)' : 'rgba(0, 255, 0, 0.6)';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(40, 130);
+            ctx.lineTo(canvas.width - 40, 130);
+            ctx.stroke();
+
+            // Content with auto-scroll
+            const startY = 180;
+            const lineHeight = 32;
+            const visibleLines = Math.floor(progress * story.lines.length);
+            const maxVisibleLines = Math.floor((canvas.height - 220) / lineHeight);
+
+            if (visibleLines > maxVisibleLines) {
+                scrollOffset = (visibleLines - maxVisibleLines) * lineHeight;
+            }
+
+            ctx.shadowBlur = 8;
+
+            // Clipping region
+            ctx.save();
+            ctx.beginPath();
+            ctx.rect(0, 140, canvas.width, canvas.height - 180);
+            ctx.clip();
+
+            for (let i = 0; i < visibleLines && i < story.lines.length; i++) {
+                const line = story.lines[i];
+                const yPos = startY + i * lineHeight - scrollOffset;
+
+                if (yPos < 140 || yPos > canvas.height - 40) {
+                    continue;
+                }
+
+                const opacity = Math.min((progress - (i / story.lines.length)) * 3, 1);
+
+                if (line === '') {
+                    continue;
+                }
+
+                // 더 밝은 색상
+                if (line.includes('WARNING') || line.includes('CRITICAL') || line.includes('FAILED') || line.includes('LOST') || line.includes('TERMINATED')) {
+                    ctx.fillStyle = 'rgba(255, 100, 100, ' + (opacity * 0.95) + ')';
+                    ctx.shadowColor = 'rgba(255, 100, 100, 0.9)';
+                } else if (line.includes('SUCCESS') || line.includes('CONFIRMED')) {
+                    ctx.fillStyle = 'rgba(100, 255, 100, ' + (opacity * 0.95) + ')';
+                    ctx.shadowColor = 'rgba(100, 255, 100, 0.9)';
+                } else if (line.startsWith('>')) {
+                    if (color === '#f00') {
+                        ctx.fillStyle = 'rgba(255, 80, 80, ' + (opacity * 0.95) + ')';
+                        ctx.shadowColor = 'rgba(255, 0, 0, 0.8)';
+                    } else {
+                        ctx.fillStyle = 'rgba(80, 255, 80, ' + (opacity * 0.95) + ')';
+                        ctx.shadowColor = 'rgba(0, 255, 0, 0.8)';
+                    }
+                } else {
+                    if (color === '#f00') {
+                        ctx.fillStyle = 'rgba(255, 200, 200, ' + (opacity * 0.9) + ')';
+                        ctx.shadowColor = 'rgba(255, 0, 0, 0.6)';
+                    } else {
+                        ctx.fillStyle = 'rgba(200, 255, 200, ' + (opacity * 0.9) + ')';
+                        ctx.shadowColor = 'rgba(0, 255, 0, 0.6)';
+                    }
+                }
+
+                const hasKorean = /[ㄱ-ㅎ|ㅏ-ㅣ|가-힣]/.test(line);
+                if (hasKorean) {
+                    ctx.font = '16px Noto Sans KR';
+                } else {
+                    ctx.font = '17px Share Tech Mono';
+                }
+
+                ctx.fillText(line, 60, yPos);
+
+                if (i === visibleLines - 1 && Math.floor(Date.now() / 500) % 2 === 0) {
+                    const textWidth = ctx.measureText(line).width;
+                    ctx.fillStyle = color;
+                    ctx.shadowBlur = 5;
+                    ctx.fillRect(65 + textWidth, yPos - 14, 10, 18);
+                }
+            }
+
+            ctx.restore();
+            ctx.shadowBlur = 0;
+
+            const scanY = (Date.now() % 3000) / 3000 * canvas.height;
+            drawScanLine(scanY, color);
+
+            drawNoise(color);
+            drawHUD(color);
+        }
+
+        function animate(story) {
+            const elapsed = (Date.now() - startTime) / 1000;
+            const duration = 90; // 1분 30초
+
+            if (elapsed > duration) {
+                ctx.fillStyle = '#000';
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+                if (bgOscillator) {
+                    bgGain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 2);
+                    setTimeout(() => {
+                        if (bgOscillator) bgOscillator.stop();
+                    }, 2000);
+                }
+
+                setTimeout(() => {
+                    startScreen.style.display = 'flex';
+                    scrollOffset = 0;
+                }, 2000);
+                return;
+            }
+
+            const currentVisibleLines = Math.floor((elapsed / duration) * story.lines.length);
+            if (currentVisibleLines !== currentLine) {
+                if (story.lines[currentVisibleLines] && story.lines[currentVisibleLines].trim() !== '') {
+                    playBeep(selectedEnding === 'success');
+                }
+                currentLine = currentVisibleLines;
+            }
+
+            drawScene(story, elapsed / duration);
+
+            requestAnimationFrame(() => animate(story));
+        }
+
+        function startEnding(ending) {
+            selectedEnding = ending;
+            startScreen.style.display = 'none';
+            scrollOffset = 0;
+
+            const story = ending === 'success' ? successStory : failedStory;
+
+            if (ending === 'failed') {
+                scanOverlay.classList.add('failed');
+            } else {
+                scanOverlay.classList.remove('failed');
+            }
+
+            try {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                startAmbientSound(ending === 'success');
+                playStaticNoise(0.5);
+            } catch(e) {}
+
+            currentLine = -1;
+            startTime = Date.now();
+            animate(story);
+        }
+
+        successButton.addEventListener('click', () => startEnding('success'));
+        failedButton.addEventListener('click', () => startEnding('failed'));
+    </script>
+</body>
+</html>
