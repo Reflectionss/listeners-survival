@@ -1,0 +1,667 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LISTENERS SURVIVAL - TRANSMISSION LOG</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Noto+Sans+KR:wght@300;400;700&display=swap');
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            background: #000;
+            overflow: hidden;
+            font-family: 'Share Tech Mono', monospace;
+            color: #0f0;
+        }
+
+        .start-screen {
+            position: fixed;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            background: #000;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+        }
+
+        .boot-text {
+            font-family: 'Share Tech Mono', monospace;
+            font-size: 24px;
+            color: #0f0;
+            text-align: center;
+            text-shadow: 0 0 10px #0f0;
+            margin-bottom: 40px;
+        }
+
+        .start-button {
+            padding: 20px 60px;
+            font-size: 18px;
+            font-family: 'Share Tech Mono', monospace;
+            color: #0f0;
+            background: rgba(0, 255, 0, 0.1);
+            border: 2px solid #0f0;
+            cursor: pointer;
+            text-transform: uppercase;
+            letter-spacing: 3px;
+            transition: all 0.3s;
+            box-shadow: 0 0 20px rgba(0, 255, 0, 0.3);
+        }
+
+        .start-button:hover {
+            background: rgba(0, 255, 0, 0.2);
+            box-shadow: 0 0 30px rgba(0, 255, 0, 0.5);
+        }
+
+        canvas {
+            display: block;
+            width: 100vw;
+            height: 100vh;
+            background: #000;
+        }
+
+        .scan-overlay {
+            position: fixed;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            background:
+                repeating-linear-gradient(
+                    0deg,
+                    transparent,
+                    transparent 2px,
+                    rgba(0, 255, 0, 0.03) 2px,
+                    rgba(0, 255, 0, 0.03) 4px
+                );
+            pointer-events: none;
+            z-index: 10;
+        }
+
+        .vignette {
+            position: fixed;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            background: radial-gradient(circle at center, transparent 0%, rgba(0, 0, 0, 0.7) 100%);
+            pointer-events: none;
+            z-index: 5;
+        }
+    </style>
+</head>
+<body>
+    <div class="start-screen" id="startScreen">
+        <div class="boot-text">
+            > SYSTEM INITIALIZING...<br>
+            > LISTENERS SURVIVAL<br>
+            > TRANSMISSION LOG ACCESS
+        </div>
+        <div class="start-button" id="startButton">[ ACCESS LOG ]</div>
+    </div>
+
+    <div class="scan-overlay"></div>
+    <div class="vignette"></div>
+    <canvas id="canvas"></canvas>
+
+    <script>
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        const startScreen = document.getElementById('startScreen');
+        const startButton = document.getElementById('startButton');
+
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+
+        window.addEventListener('resize', () => {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+        });
+
+        let audioCtx;
+        let startTime;
+        let currentLine = 0;
+        let currentScene = 0;
+
+        // Background ambient sound
+        let bgOscillator;
+        let bgGain;
+
+        function startAmbientSound() {
+            if (!audioCtx) return;
+            try {
+                bgOscillator = audioCtx.createOscillator();
+                bgGain = audioCtx.createGain();
+
+                bgOscillator.type = 'sine';
+                bgOscillator.frequency.value = 40;
+                bgGain.gain.value = 0.05;
+
+                bgOscillator.connect(bgGain);
+                bgGain.connect(audioCtx.destination);
+                bgOscillator.start();
+            } catch(e) {}
+        }
+
+        function playStaticNoise(duration) {
+            if (!audioCtx) return;
+            try {
+                const bufferSize = audioCtx.sampleRate * duration;
+                const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+                const output = buffer.getChannelData(0);
+
+                for (let i = 0; i < bufferSize; i++) {
+                    output[i] = (Math.random() * 2 - 1) * 0.15;
+                }
+
+                const noise = audioCtx.createBufferSource();
+                const filter = audioCtx.createBiquadFilter();
+                const gain = audioCtx.createGain();
+
+                filter.type = 'bandpass';
+                filter.frequency.value = 1500;
+
+                noise.buffer = buffer;
+                gain.gain.setValueAtTime(0.2, audioCtx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + duration);
+
+                noise.connect(filter);
+                filter.connect(gain);
+                gain.connect(audioCtx.destination);
+                noise.start();
+            } catch(e) {}
+        }
+
+        function playBeep() {
+            if (!audioCtx) return;
+            try {
+                const osc = audioCtx.createOscillator();
+                const gain = audioCtx.createGain();
+
+                osc.frequency.value = 800;
+                gain.gain.value = 0.1;
+
+                osc.connect(gain);
+                gain.connect(audioCtx.destination);
+
+                osc.start();
+                osc.stop(audioCtx.currentTime + 0.05);
+            } catch(e) {}
+        }
+
+        // Story data
+        const storyScenes = [
+            {
+                header: "SYSTEM STATUS: INITIALIZING",
+                subheader: "TRANSMISSION LOG ACCESS GRANTED",
+                lines: [
+                    "> LOADING ARCHIVE...",
+                    "> DATE: 2026.XX.XX",
+                    "> CLASSIFICATION: TOP SECRET",
+                    "",
+                    "> WORLD STORY",
+                    "> THE BEGINNING OF THE END",
+                    "",
+                    "> 2026년, 인류는 역사상 가장 큰 재앙을 맞이했다."
+                ],
+                duration: 15
+            },
+            {
+                header: "CHAPTER 01: THE IMPACT",
+                subheader: "[충돌 이후]",
+                lines: [
+                    "> INCIDENT REPORT: ASTEROID COLLISION",
+                    "> LOCATION: [REDACTED]",
+                    "> CASUALTIES: ESTIMATED 2.4M+",
+                    "",
+                    "> 처음에는 평범한 천문학적 이상 현상으로 여겨졌다.",
+                    "> 외계 소행성이 지구와 충돌했다.",
+                    "",
+                    "> 충돌 지점 주변에서 정체불명의 물질 발견.",
+                    "> 기존 지구 생명체와 유사하지 않은 유기물 흔적.",
+                    "",
+                    "> 땅속에서 발견된 알 형태의 구조물.",
+                    "> 그것들은 바위도, 광물도 아니었다.",
+                    "",
+                    "> ALERT: UNKNOWN BIOLOGICAL SIGNATURES DETECTED"
+                ],
+                duration: 20
+            },
+            {
+                header: "CHAPTER 02: THE HATCHING",
+                subheader: "[부화]",
+                lines: [
+                    "> BIOHAZARD ALERT LEVEL: CRITICAL",
+                    "> STATUS: CONTAINMENT FAILED",
+                    "",
+                    "> 충돌 이후 약 수 주가 지났을 무렵.",
+                    "> 발견된 알 형태의 물체 중 일부가 갈라지기 시작했다.",
+                    "",
+                    "> 알에서 나온 생명체는",
+                    "> 지구상의 어떤 동물과도 닮지 않았다.",
+                    "",
+                    "> 불규칙한 신체 구조.",
+                    "> 비정상적인 움직임.",
+                    "> 강한 산성 물질 분비.",
+                    "",
+                    "> 가장 위협적인 특징:",
+                    "> 그들은 소리에 반응했다.",
+                    "",
+                    "> DESIGNATION: UNKNOWN ENTITIES (UE)"
+                ],
+                duration: 20
+            },
+            {
+                header: "CHAPTER 03: THE SPREAD",
+                subheader: "[확산]",
+                lines: [
+                    "> GLOBAL THREAT ASSESSMENT: CRITICAL",
+                    "> MULTIPLE CITIES COMPROMISED",
+                    "> EVACUATION IN PROGRESS",
+                    "",
+                    "> 개체들은 주변 지역으로 이동하기 시작했다.",
+                    "> 건물 내부와 지하 시설에서도 개체가 발견되었다.",
+                    "",
+                    "> 각국 정부는 군대를 투입하고",
+                    "> 주요 도시를 봉쇄했지만,",
+                    "> 개체들의 확산을 막기에는 역부족이었다.",
+                    "",
+                    "> 산성 물질로 인해 도로와 건축물 손상.",
+                    "> 주요 통신 시설과 발전소 기능 상실.",
+                    "",
+                    "> 구조 작전 연이어 실패.",
+                    "",
+                    "> WARNING: EXTRACTION TEAMS UNRESPONSIVE"
+                ],
+                duration: 20
+            },
+            {
+                header: "CHAPTER 04: THE LAST TRANSMISSION",
+                subheader: "[마지막 무전]",
+                lines: [
+                    "> INCOMING TRANSMISSION",
+                    "> SOURCE: ECHO 3 SQUAD",
+                    "> SIGNAL STRENGTH: WEAK",
+                    "",
+                    "> [STATIC]",
+                    "> '본부, 여기는 에코 3. 응답 바란다.'",
+                    "",
+                    "> '미확인 개체가 병원 내부로 진입했다.'",
+                    "> '반복한다. 병원이 습격당했다.'",
+                    "",
+                    "> '사상자 다수 발생...'",
+                    "> '기존 탈출경로 이동 불가...'",
+                    "",
+                    "> '통신이... 불안정...'",
+                    "> [SIGNAL LOST]",
+                    "",
+                    "> CONNECTION TERMINATED",
+                    "> ECHO 3 STATUS: UNKNOWN",
+                    "",
+                    "> 그 지역에 남아 있던 생존자들은",
+                    "> 외부의 도움을 기다릴 수밖에 없었다."
+                ],
+                duration: 25
+            },
+            {
+                header: "CHAPTER 05: THE EXTRACTION",
+                subheader: "[탈출]",
+                lines: [
+                    "> SURVIVAL PROTOCOL INITIATED",
+                    "> EXTRACTION PROCEDURE: GREEN FLARE SIGNAL",
+                    "",
+                    "> 생존자들을 위한 탈출 체계가 구축되었다.",
+                    "",
+                    "> 지정된 탈출 구역에 도착한 생존자들은",
+                    "> 녹색 신호탄을 하늘로 발사해야 한다.",
+                    "",
+                    "> 신호를 확인한 구조팀이 위치를 파악하고",
+                    "> 탈출 작전을 준비한다.",
+                    "",
+                    "> 하지만...",
+                    "",
+                    "> 신호탄을 발사하는 순간 큰 소리와 빛이 발생한다.",
+                    "",
+                    "> 구조팀에게는 생존 신호.",
+                    "> 미확인 개체들에게는 위치 노출.",
+                    "",
+                    "> WARNING: PROCEED WITH EXTREME CAUTION"
+                ],
+                duration: 25
+            },
+            {
+                header: "CHAPTER 06: YOUR STORY",
+                subheader: "[당신의 이야기]",
+                lines: [
+                    "> PERSONNEL FILE: [CLASSIFIED]",
+                    "> STATUS: SURVIVOR",
+                    "> LOCATION: UNKNOWN",
+                    "",
+                    "> 세상은 이미 무너졌다.",
+                    "> 도시는 폐허가 되었고,",
+                    "> 통신은 끊겼으며,",
+                    "> 미확인 개체들이 주변을 배회하고 있다.",
+                    "",
+                    "> 당신은 아직 살아남은 생존자 중 한 명이다.",
+                    "",
+                    "> MISSION OBJECTIVES:",
+                    "> - 위험한 지역 통과",
+                    "> - 탈출 구역 도달",
+                    "",
+                    "> CRITICAL RULE:",
+                    "> DO NOT MAKE A SOUND.",
+                    "",
+                    "> 발걸음 하나, 물건이 떨어지는 소리, 문을 여는 소리.",
+                    "> 작은 소음 하나가 모든 것을 끝낼 수 있다."
+                ],
+                duration: 30
+            },
+            {
+                header: "FINAL WARNING",
+                subheader: "[최종 경고]",
+                lines: [
+                    "",
+                    "",
+                    "",
+                    "> 생존자들은 서로 협력하며 탈출할 수 있는 구역을 찾아야 한다.",
+                    "",
+                    "> 그곳에 도착하면 녹색 신호탄을 발사해",
+                    "> 구조 요청을 보내야 한다.",
+                    "",
+                    "> 하늘 위로 솟아오른 녹색 불빛.",
+                    "> 그것은 단순한 신호가 아니다.",
+                    "",
+                    "> 이곳에 아직 살아 있는 사람이 있다는 증거이자,",
+                    "> 누군가에게 발견되기를 바라는 마지막 희망이다.",
+                    "",
+                    "",
+                    "> REMEMBER:",
+                    "",
+                    "> 소리를 내지 마라.",
+                    "> 그들은 듣고 있다.",
+                    "",
+                    ""
+                ],
+                duration: 30
+            },
+            {
+                header: "TRANSMISSION END",
+                subheader: "",
+                lines: [
+                    "",
+                    "",
+                    "",
+                    "",
+                    "",
+                    "> LISTENERS SURVIVAL",
+                    "> 침묵 속의 탈출",
+                    "",
+                    "",
+                    "> COMING SOON",
+                    "",
+                    "",
+                    "",
+                    "",
+                    ""
+                ],
+                duration: 15
+            }
+        ];
+
+        function drawScanLine(y) {
+            ctx.strokeStyle = 'rgba(0, 255, 0, 0.3)';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(0, y);
+            ctx.lineTo(canvas.width, y);
+            ctx.stroke();
+        }
+
+        function drawNoise() {
+            for (let i = 0; i < 50; i++) {
+                ctx.fillStyle = 'rgba(0, 255, 0, ' + (Math.random() * 0.05) + ')';
+                ctx.fillRect(
+                    Math.random() * canvas.width,
+                    Math.random() * canvas.height,
+                    2,
+                    2
+                );
+            }
+        }
+
+        function drawHUD() {
+            const time = new Date().toISOString().split('T')[1].split('.')[0];
+
+            // Top left corner
+            ctx.font = '12px Share Tech Mono';
+            ctx.fillStyle = '#0f0';
+            ctx.textAlign = 'left';
+            ctx.fillText('REC', 20, 30);
+            ctx.fillStyle = 'rgba(255, 0, 0, 0.8)';
+            ctx.fillRect(50, 23, 8, 8);
+
+            ctx.fillStyle = '#0f0';
+            ctx.fillText(time, 70, 30);
+
+            // Top right corner
+            ctx.textAlign = 'right';
+            ctx.fillText('SIGNAL: [' + '█'.repeat(Math.floor(Math.random() * 5) + 3) + ' '.repeat(5) + ']', canvas.width - 20, 30);
+
+            // Bottom left
+            ctx.textAlign = 'left';
+            ctx.fillText('SYSTEM: ACTIVE', 20, canvas.height - 20);
+
+            // Bottom right
+            ctx.textAlign = 'right';
+            ctx.fillText('ENCRYPTED CHANNEL', canvas.width - 20, canvas.height - 20);
+
+            // Corner brackets
+            ctx.strokeStyle = '#0f0';
+            ctx.lineWidth = 2;
+            const cornerSize = 20;
+
+            // Top left
+            ctx.beginPath();
+            ctx.moveTo(10, 10 + cornerSize);
+            ctx.lineTo(10, 10);
+            ctx.lineTo(10 + cornerSize, 10);
+            ctx.stroke();
+
+            // Top right
+            ctx.beginPath();
+            ctx.moveTo(canvas.width - 10 - cornerSize, 10);
+            ctx.lineTo(canvas.width - 10, 10);
+            ctx.lineTo(canvas.width - 10, 10 + cornerSize);
+            ctx.stroke();
+
+            // Bottom left
+            ctx.beginPath();
+            ctx.moveTo(10, canvas.height - 10 - cornerSize);
+            ctx.lineTo(10, canvas.height - 10);
+            ctx.lineTo(10 + cornerSize, canvas.height - 10);
+            ctx.stroke();
+
+            // Bottom right
+            ctx.beginPath();
+            ctx.moveTo(canvas.width - 10 - cornerSize, canvas.height - 10);
+            ctx.lineTo(canvas.width - 10, canvas.height - 10);
+            ctx.lineTo(canvas.width - 10, canvas.height - 10 - cornerSize);
+            ctx.stroke();
+        }
+
+        function typewriterEffect(text, x, y, maxChars) {
+            const lines = [];
+            let currentLine = '';
+            const words = text.split(' ');
+
+            words.forEach(word => {
+                if ((currentLine + word).length > maxChars) {
+                    lines.push(currentLine.trim());
+                    currentLine = word + ' ';
+                } else {
+                    currentLine += word + ' ';
+                }
+            });
+            if (currentLine) lines.push(currentLine.trim());
+
+            return lines;
+        }
+
+        function drawScene(scene, progress) {
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.9)';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // Header
+            ctx.font = 'bold 20px Share Tech Mono';
+            ctx.fillStyle = '#0f0';
+            ctx.textAlign = 'left';
+            ctx.shadowColor = '#0f0';
+            ctx.shadowBlur = 10;
+            ctx.fillText('> ' + scene.header, 40, 80);
+
+            if (scene.subheader) {
+                ctx.font = '16px Share Tech Mono';
+                ctx.fillStyle = 'rgba(0, 255, 0, 0.7)';
+                ctx.fillText(scene.subheader, 40, 110);
+            }
+
+            // Horizontal line
+            ctx.strokeStyle = 'rgba(0, 255, 0, 0.5)';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(40, 130);
+            ctx.lineTo(canvas.width - 40, 130);
+            ctx.stroke();
+
+            // Content
+            const startY = 170;
+            const lineHeight = 30;
+            const visibleLines = Math.floor(progress * scene.lines.length);
+
+            ctx.font = '16px Share Tech Mono';
+            ctx.shadowBlur = 5;
+
+            for (let i = 0; i < visibleLines && i < scene.lines.length; i++) {
+                const line = scene.lines[i];
+                const opacity = Math.min((progress - (i / scene.lines.length)) * 3, 1);
+
+                if (line === '') {
+                    continue;
+                }
+
+                if (line.includes('ALERT') || line.includes('WARNING') || line.includes('CRITICAL')) {
+                    ctx.fillStyle = 'rgba(255, 100, 100, ' + opacity + ')';
+                    ctx.shadowColor = 'rgba(255, 100, 100, 0.8)';
+                } else if (line.startsWith('>')) {
+                    ctx.fillStyle = 'rgba(0, 255, 0, ' + (opacity * 0.9) + ')';
+                    ctx.shadowColor = '#0f0';
+                } else {
+                    ctx.fillStyle = 'rgba(200, 255, 200, ' + (opacity * 0.8) + ')';
+                    ctx.shadowColor = 'rgba(0, 255, 0, 0.5)';
+                }
+
+                // Korean text handling
+                const hasKorean = /[ㄱ-ㅎ|ㅏ-ㅣ|가-힣]/.test(line);
+                if (hasKorean) {
+                    ctx.font = '15px Noto Sans KR';
+                } else {
+                    ctx.font = '16px Share Tech Mono';
+                }
+
+                ctx.fillText(line, 60, startY + i * lineHeight);
+
+                // Cursor effect on last visible line
+                if (i === visibleLines - 1 && Math.floor(Date.now() / 500) % 2 === 0) {
+                    const textWidth = ctx.measureText(line).width;
+                    ctx.fillStyle = '#0f0';
+                    ctx.fillRect(65 + textWidth, startY + i * lineHeight - 14, 8, 16);
+                }
+            }
+
+            ctx.shadowBlur = 0;
+
+            // Scanning line
+            const scanY = (Date.now() % 3000) / 3000 * canvas.height;
+            drawScanLine(scanY);
+
+            // Noise
+            drawNoise();
+
+            // HUD
+            drawHUD();
+        }
+
+        function animate() {
+            const elapsed = (Date.now() - startTime) / 1000;
+
+            // Calculate current scene
+            let accumulatedTime = 0;
+            let currentSceneIndex = 0;
+
+            for (let i = 0; i < storyScenes.length; i++) {
+                if (elapsed < accumulatedTime + storyScenes[i].duration) {
+                    currentSceneIndex = i;
+                    break;
+                }
+                accumulatedTime += storyScenes[i].duration;
+            }
+
+            const sceneStartTime = elapsed - accumulatedTime;
+            const scene = storyScenes[currentSceneIndex];
+            const sceneProgress = sceneStartTime / scene.duration;
+
+            // End of all scenes
+            if (elapsed > storyScenes.reduce((sum, s) => sum + s.duration, 0)) {
+                ctx.fillStyle = '#000';
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+                if (bgOscillator) {
+                    bgGain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 2);
+                    setTimeout(() => {
+                        if (bgOscillator) bgOscillator.stop();
+                    }, 2000);
+                }
+
+                setTimeout(() => {
+                    startScreen.style.display = 'flex';
+                    startButton.textContent = '[ REPLAY LOG ]';
+                }, 2000);
+                return;
+            }
+
+            // Play sound effects
+            if (currentSceneIndex !== currentScene) {
+                playStaticNoise(0.3);
+                currentScene = currentSceneIndex;
+            }
+
+            // Beep sound for each new line
+            const currentVisibleLines = Math.floor(sceneProgress * scene.lines.length);
+            if (currentVisibleLines !== currentLine) {
+                if (scene.lines[currentVisibleLines] && scene.lines[currentVisibleLines].trim() !== '') {
+                    playBeep();
+                }
+                currentLine = currentVisibleLines;
+            }
+
+            drawScene(scene, sceneProgress);
+
+            requestAnimationFrame(animate);
+        }
+
+        startButton.addEventListener('click', () => {
+            startScreen.style.display = 'none';
+
+            try {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                startAmbientSound();
+                playStaticNoise(0.5);
+            } catch(e) {}
+
+            currentScene = -1;
+            currentLine = -1;
+            startTime = Date.now();
+            animate();
+        });
+    </script>
+</body>
+</html>
